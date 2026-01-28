@@ -1,0 +1,8 @@
+
+{
+  "name": "Verva - Dynamic Daily Planning",
+  "description": "A high-energy, AI-powered daily planning and task management application featuring Verva AI, your personal productivity architect.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
