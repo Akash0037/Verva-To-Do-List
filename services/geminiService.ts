@@ -4,10 +4,106 @@ import { Task, ChatMessage } from "../types";
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
 
-// Models to try in order of preference
-const MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro'];
+// Models to try in order - using models with best free tier availability
+const MODELS = ['gemini-2.0-flash-lite', 'gemini-1.5-flash-8b', 'gemini-1.5-flash', 'gemini-pro'];
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Fallback responses when API is unavailable
+const getFallbackResponse = (message: string, tasks: Task[]): string => {
+  const lowerMessage = message.toLowerCase();
+  const pendingTasks = tasks.filter(t => !t.completed);
+  const highPriorityTasks = pendingTasks.filter(t => t.priority === 'high');
+  
+  // Study/planning related
+  if (lowerMessage.includes('study') || lowerMessage.includes('plan') || lowerMessage.includes('schedule')) {
+    return `📚 **Here's a study plan template:**
+
+**Morning Block (9 AM - 12 PM)**
+• Focus on your **most challenging** subject
+• Use **25-min Pomodoro** sessions
+• Take a 5-min break between sessions
+
+**Afternoon Block (2 PM - 5 PM)**  
+• Review and practice problems
+• Active recall & flashcards
+• 15-min break halfway
+
+**Evening Block (7 PM - 9 PM)**
+• Light review of the day's material
+• Prepare tomorrow's priorities
+
+${pendingTasks.length > 0 ? `\n💡 **Your pending tasks:** ${pendingTasks.slice(0, 3).map(t => t.title).join(', ')}` : ''}
+
+*Tip: Start with your hardest task when energy is highest!*`;
+  }
+  
+  // Morning routine
+  if (lowerMessage.includes('morning') || lowerMessage.includes('wake') || lowerMessage.includes('start')) {
+    return `☀️ **Power Morning Routine:**
+
+• **6:30 AM** - Wake up, hydrate immediately
+• **6:45 AM** - 10-min stretch or light exercise
+• **7:00 AM** - Healthy breakfast, no phone
+• **7:30 AM** - Review your **top 3 priorities**
+• **8:00 AM** - Start your **most important task**
+
+${highPriorityTasks.length > 0 ? `\n🔥 **Your high-priority tasks:** ${highPriorityTasks.map(t => t.title).join(', ')}` : ''}
+
+*Remember: Win the morning, win the day!*`;
+  }
+  
+  // Focus/productivity tips
+  if (lowerMessage.includes('focus') || lowerMessage.includes('productive') || lowerMessage.includes('concentrate')) {
+    return `🎯 **Deep Focus Strategies:**
+
+• **Pomodoro Technique** - 25 min work, 5 min rest
+• **Remove distractions** - Phone in another room
+• **Single-tasking** - One task at a time only
+• **Time blocking** - Schedule specific tasks
+• **2-minute rule** - If it takes <2 min, do it now
+
+**Environment tips:**
+• Use noise-canceling or lo-fi music
+• Keep water nearby
+• Good lighting is essential
+
+*Your focus is your superpower!*`;
+  }
+  
+  // Task management
+  if (lowerMessage.includes('task') || lowerMessage.includes('todo') || lowerMessage.includes('manage')) {
+    const taskSummary = pendingTasks.length > 0 
+      ? `\n📋 **Your current tasks (${pendingTasks.length}):**\n${pendingTasks.slice(0, 5).map(t => `• ${t.title} (**${t.priority}** priority)`).join('\n')}`
+      : '\n✨ You have no pending tasks!';
+    
+    return `📝 **Task Management Tips:**
+
+**Prioritization Framework:**
+1. **Urgent + Important** → Do first
+2. **Important, not urgent** → Schedule it
+3. **Urgent, not important** → Delegate if possible
+4. **Neither** → Consider removing
+${taskSummary}
+
+*Focus on progress, not perfection!*`;
+  }
+  
+  // Default helpful response
+  return `👋 **Hey! I'm Verva, your productivity partner.**
+
+I'm currently in **offline mode** (API limit reached), but I can still help!
+
+**Try asking me about:**
+• "Plan my study session"
+• "Morning routine tips"  
+• "How to focus better"
+• "Help with my tasks"
+
+${pendingTasks.length > 0 ? `\n📋 **Quick tip:** You have **${pendingTasks.length} pending tasks**. Start with the highest priority one!` : ''}
+
+*Full AI features will resume shortly!*`;
+};
 
 export const getAiResponse = async (
   message: string, 
@@ -15,8 +111,8 @@ export const getAiResponse = async (
   tasks: Task[]
 ): Promise<string> => {
   if (!API_KEY) {
-    console.error("Gemini API key not found. Please set GEMINI_API_KEY in your environment.");
-    return "API key not configured. Please add your Gemini API key to continue.";
+    console.error("Gemini API key not found. Using fallback mode.");
+    return getFallbackResponse(message, tasks);
   }
 
   const ai = new GoogleGenAI({ apiKey: API_KEY });
@@ -43,7 +139,10 @@ export const getAiResponse = async (
     Provide actionable time management strategies. If the user asks for a plan, break it down into a clear, numbered or bulleted list. Suggest Pomodoro breaks where appropriate.
   `;
 
-  const formattedContents = history.map(msg => ({
+  // Keep only last 4 messages to reduce token usage
+  const recentHistory = history.slice(-4);
+  
+  const formattedContents = recentHistory.map(msg => ({
     role: msg.role === 'user' ? 'user' : 'model',
     parts: [{ text: msg.content }]
   }));
@@ -65,7 +164,7 @@ export const getAiResponse = async (
             systemInstruction: systemInstruction,
             temperature: 0.7,
             topP: 0.9,
-            maxOutputTokens: 1000,
+            maxOutputTokens: 500,
           }
         });
 
@@ -75,23 +174,21 @@ export const getAiResponse = async (
         
         // Check if it's a rate limit error
         if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
-          // Extract retry delay from error if available
           const retryMatch = error?.message?.match(/retry in (\d+\.?\d*)s/i);
           const retryDelay = retryMatch ? parseFloat(retryMatch[1]) * 1000 : 5000;
           
           if (attempt === 0) {
             console.log(`Rate limited. Waiting ${retryDelay}ms before retry...`);
-            await delay(Math.min(retryDelay, 10000)); // Max 10 second wait
+            await delay(Math.min(retryDelay, 15000));
             continue;
           }
         }
         
-        // If not a rate limit error or retry failed, try next model
         break;
       }
     }
   }
 
-  // All models failed
-  return "⚠️ **API quota exceeded.** Your free tier limit has been reached. Please wait a few minutes or check your [Google AI Studio](https://aistudio.google.com/) billing settings.";
+  // All models failed - use fallback
+  return getFallbackResponse(message, tasks);
 };
